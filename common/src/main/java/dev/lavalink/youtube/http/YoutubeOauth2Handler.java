@@ -248,8 +248,8 @@ public class YoutubeOauth2Handler {
 
             JsonBrowser json = createNewAccessToken(refreshToken);
             updateTokens(json);
-            log.info("YouTube access token refreshed successfully");
-            log.debug("YouTube access token is {} and refresh token is {}. Access token expires in {} seconds.", accessToken, refreshToken, json.get("expires_in").asLong(300));
+            log.info("\u001B[35m[YouTube OAuth]\u001B[0m Access token refreshed successfully (\u001B[32mexpires in {}s\u001B[0m)", json.get("expires_in").asLong(3600));
+            log.debug("YouTube access token is {} and refresh token is {}.", accessToken, refreshToken);
         }
     }
 

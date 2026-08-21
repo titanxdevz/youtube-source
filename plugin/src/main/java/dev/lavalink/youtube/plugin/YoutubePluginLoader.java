@@ -12,6 +12,7 @@ import dev.lavalink.youtube.YoutubeSource;
 import dev.lavalink.youtube.YoutubeSourceOptions;
 import dev.lavalink.youtube.clients.ClientOptions;
 import dev.lavalink.youtube.clients.skeleton.Client;
+import dev.lavalink.youtube.vexanode.VexaNodeSourceManager;
 import lavalink.server.config.RateLimitConfig;
 import lavalink.server.config.ServerConfig;
 import org.slf4j.Logger;
@@ -34,8 +35,6 @@ public class YoutubePluginLoader implements AudioPlayerManagerConfiguration {
     private final RateLimitConfig ratelimitConfig;
     private final ClientProvider clientProvider;
 
-    // This entire thing is a hack BTW. Designed to support Lavalink v3 and v4
-    // with a single plugin. Totally worth it!
     public YoutubePluginLoader(final YoutubeConfig youtubeConfig,
                                final ServerConfig serverConfig) {
         this.youtubeConfig = youtubeConfig;
@@ -181,12 +180,100 @@ public class YoutubePluginLoader implements AudioPlayerManagerConfiguration {
             }
 
             if (cipherConfig != null && cipherConfig.getUrl() != null) {
-                log.info("Using remote cipher server with URL \"{}\"", cipherConfig.getUrl());
+                log.info("\u001B[35m[VexaNode]\u001B[0m Using remote cipher server: \u001B[36m{}\u001B[0m", cipherConfig.getUrl());
                 sourceOptions.setRemoteCipher(cipherConfig.getUrl(), cipherConfig.getPassword(), cipherConfig.getUserAgent());
             }
         }
 
-        final YoutubeAudioSourceManager source = new YoutubeAudioSourceManager(sourceOptions, clients);
+        VexaNodeConfig vConfig = youtubeConfig != null && youtubeConfig.getVexanode() != null
+            ? youtubeConfig.getVexanode()
+            : new VexaNodeConfig();
+
+        final VexaNodeSourceManager source;
+        if (vConfig.isEnabled()) {
+            dev.lavalink.youtube.vexanode.health.HealthEngine healthEngine = new dev.lavalink.youtube.vexanode.health.HealthEngine(
+                vConfig.getCircuitBreakerFailureThreshold(),
+                vConfig.getCircuitBreakerCooldown() * 1000L
+            );
+            dev.lavalink.youtube.vexanode.auth.CredentialManager credentialManager = new dev.lavalink.youtube.vexanode.auth.CredentialManager();
+            dev.lavalink.youtube.vexanode.pot.PoTokenManager poTokenManager = new dev.lavalink.youtube.vexanode.pot.PoTokenManager();
+            poTokenManager.setProviderUrl(vConfig.getPotProviderUrl());
+            poTokenManager.setGeneratePerVideo(vConfig.isPotGeneratePerVideo());
+            poTokenManager.setDefaultTtlMs(vConfig.getPotTtl() * 1000L);
+            poTokenManager.setMaxCapacity(vConfig.getPotMaxCapacity());
+            dev.lavalink.youtube.vexanode.cache.MetadataCache metadataCache = new dev.lavalink.youtube.vexanode.cache.MetadataCache(
+                vConfig.getMetadataTtl() * 1000L,
+                vConfig.getMetadataMaxCapacity()
+            );
+            dev.lavalink.youtube.vexanode.dedup.RequestDeduplicator requestDeduplicator = new dev.lavalink.youtube.vexanode.dedup.RequestDeduplicator();
+            dev.lavalink.youtube.vexanode.resolver.ClientScorer clientScorer = new dev.lavalink.youtube.vexanode.resolver.ClientScorer(100.0, 0.02, 15.0, vConfig.isExploration());
+            dev.lavalink.youtube.vexanode.resolver.AdaptiveResolver adaptiveResolver = new dev.lavalink.youtube.vexanode.resolver.AdaptiveResolver(
+                healthEngine,
+                credentialManager,
+                poTokenManager,
+                clientScorer,
+                vConfig.getMaxAttempts(),
+                vConfig.getMaxClientSwitches(),
+                vConfig.getMaxAuthRefreshes()
+            );
+            dev.lavalink.youtube.vexanode.recovery.RecoveryEngine recoveryEngine = new dev.lavalink.youtube.vexanode.recovery.RecoveryEngine(healthEngine);
+            dev.lavalink.youtube.vexanode.metrics.VexaNodeMetrics metrics = new dev.lavalink.youtube.vexanode.metrics.VexaNodeMetrics();
+
+            source = new dev.lavalink.youtube.vexanode.VexaNodeSourceManager(
+                sourceOptions,
+                healthEngine,
+                credentialManager,
+                poTokenManager,
+                metadataCache,
+                requestDeduplicator,
+                clientScorer,
+                adaptiveResolver,
+                recoveryEngine,
+                metrics,
+                clients
+            );
+            source.setVexaEnabled(vConfig.isEnabled());
+            source.setAdaptiveEnabled(vConfig.isAdaptive());
+            source.setCacheEnabled(vConfig.isMetadataCache());
+            source.setDedupEnabled(vConfig.isDeduplication());
+
+            // Register POT with PoTokenManager
+            if (vConfig.getPotProviderUrl() != null && !vConfig.getPotProviderUrl().isEmpty()) {
+                poTokenManager.setProviderUrl(vConfig.getPotProviderUrl());
+                poTokenManager.setGeneratePerVideo(vConfig.isPotGeneratePerVideo());
+                log.info("\u001B[35m[VexaNode]\u001B[0m Dynamic PO-token provider configured: \u001B[36m{}\u001B[0m", vConfig.getPotProviderUrl());
+            }
+
+            if (youtubeConfig != null && youtubeConfig.getPot() != null) {
+                Pot pot = youtubeConfig.getPot();
+                if (pot.getToken() != null && pot.getVisitorData() != null) {
+                    poTokenManager.register("WEB", pot.getToken(), pot.getVisitorData());
+                    poTokenManager.register("WEBEMBEDDED", pot.getToken(), pot.getVisitorData());
+                }
+            }
+
+            // Register OAuth with CredentialManager
+            if (youtubeConfig != null && youtubeConfig.getOauth() != null && youtubeConfig.getOauth().getEnabled()) {
+                String rt = youtubeConfig.getOauth().getRefreshToken();
+                if (rt != null && !rt.isEmpty()) {
+                    credentialManager.addCredential(new dev.lavalink.youtube.vexanode.auth.OAuthCredential("account-1", rt));
+                }
+            }
+
+            if (vConfig.getOauthTokens() != null && !vConfig.getOauthTokens().isEmpty()) {
+                int accIdx = 2;
+                for (String token : vConfig.getOauthTokens()) {
+                    if (token != null && !token.trim().isEmpty()) {
+                        credentialManager.addCredential(new dev.lavalink.youtube.vexanode.auth.OAuthCredential("account-" + accIdx++, token.trim()));
+                    }
+                }
+                log.info("\u001B[35m[VexaNode]\u001B[0m Multi-Account OAuth pool registered with \u001B[32m{} credential(s)\u001B[0m", credentialManager.getAllCredentials().size());
+            }
+        } else {
+            source = new dev.lavalink.youtube.vexanode.VexaNodeSourceManager(sourceOptions, clients);
+            source.setVexaEnabled(false);
+        }
+
         final AbstractRoutePlanner routePlanner = getRoutePlanner();
 
         if (routePlanner != null) {
@@ -206,7 +293,7 @@ public class YoutubePluginLoader implements AudioPlayerManagerConfiguration {
 
         Integer playlistLoadLimit = serverConfig.getYoutubePlaylistLoadLimit();
 
-        if (playlistLoadLimit != null) {
+        if (playlistLoadLimit != null && playlistLoadLimit > 0) {
             source.setPlaylistPageCount(playlistLoadLimit);
         }
 
@@ -219,7 +306,9 @@ public class YoutubePluginLoader implements AudioPlayerManagerConfiguration {
             }
         }
 
-        log.info("YouTube source initialised with clients: {} ", Arrays.stream(source.getClients()).map(Client::getIdentifier).collect(Collectors.joining(", ")));
+        log.info("\u001B[35m[VexaNode]\u001B[0m YouTube source initialised with clients: \u001B[36m{}\u001B[0m (\u001B[32madaptive: {}\u001B[0m)",
+            Arrays.stream(source.getClients()).map(Client::getIdentifier).collect(Collectors.joining(", ")),
+            source.isAdaptiveEnabled());
         audioPlayerManager.registerSourceManager(source);
         return audioPlayerManager;
     }

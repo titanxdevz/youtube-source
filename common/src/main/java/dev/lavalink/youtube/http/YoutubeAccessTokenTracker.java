@@ -49,12 +49,15 @@ public class YoutubeAccessTokenTracker {
 
         try {
           visitorId = fetchVisitorId();
-          log.info("Updating YouTube visitor id succeeded, new one is {}, next update will be after {} seconds.",
-              visitorId,
+          String displayId = visitorId != null && visitorId.length() > 20 
+              ? visitorId.substring(0, 8) + "..." + visitorId.substring(visitorId.length() - 8) 
+              : String.valueOf(visitorId);
+          log.info("\u001B[36m[YouTube]\u001B[0m Visitor ID refreshed: \u001B[32m{}\u001B[0m (next refresh in {}s)",
+              displayId,
               TimeUnit.MILLISECONDS.toSeconds(VISITOR_ID_REFRESH_INTERVAL)
           );
         } catch (Exception e) {
-          log.error("YouTube visitor id update failed.", e);
+          log.error("\u001B[31m[YouTube]\u001B[0m Visitor ID update failed: {}", e.getMessage());
         }
       }
     }

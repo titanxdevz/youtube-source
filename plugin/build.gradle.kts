@@ -30,6 +30,8 @@ dependencies {
     compileOnly(libs.slf4j)
     compileOnly(libs.annotations)
 
+    testImplementation(libs.lavaplayer.v1)
+    testImplementation(libs.lavalink.server)
     testImplementation("org.junit.jupiter:junit-jupiter-api:5.11.0-M1")
     testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:5.11.0-M1")
 }

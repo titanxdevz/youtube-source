@@ -19,6 +19,15 @@ public class YoutubeConfig {
     private String[] clients;
     private Map<String, ClientOptions> clientOptions = new HashMap<>();
     private YoutubeOauthConfig oauth = null;
+    private VexaNodeConfig vexanode = new VexaNodeConfig();
+
+    public VexaNodeConfig getVexanode() {
+        return vexanode;
+    }
+
+    public void setVexanode(VexaNodeConfig vexanode) {
+        this.vexanode = vexanode;
+    }
 
     public boolean getEnabled() {
         return enabled;
